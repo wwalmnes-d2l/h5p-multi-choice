@@ -6,6 +6,20 @@ Can be used in Question Sets, Course Presentations and Interactive Videos.
 
 [See it in action on the H5P.org project page](https://h5p.org/multichoice)
 
+## Development
+
+The runtime is implemented in TypeScript with Lit and bundled as a classic H5P
+preloaded script.
+
+```sh
+npm install
+npm run typecheck
+npm test
+npm run build
+```
+
+The H5P runtime bundle is generated at `dist/multichoice.js`.
+
 ## License
 
 (The MIT License)

@@ -3,7 +3,7 @@
   "contentType": "Question",
   "majorVersion": 1,
   "minorVersion": 16,
-  "patchVersion": 27,
+  "patchVersion": 28,
   "runnable": 1,
   "embedTypes": [
     "iframe"
@@ -17,7 +17,7 @@
   },
   "preloadedJs": [
     {
-      "path": "js/multichoice.js"
+      "path": "dist/multichoice.js"
     }
   ],
   "preloadedCss": [
