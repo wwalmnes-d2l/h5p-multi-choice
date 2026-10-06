@@ -1,5 +1,11 @@
 import { MultiChoiceModel } from './domain/model';
-import type { ContentData, MultiChoiceOptions, StateChangeDetail } from './domain/types';
+import type {
+  ConfirmationStrings,
+  ContentData,
+  MultiChoiceOptions,
+  StateChangeDetail,
+  ViewState,
+} from './domain/types';
 import './components/multichoice-view';
 import { defineMultiChoiceElement, MultiChoiceView } from './components/multichoice-view';
 
@@ -39,7 +45,7 @@ class MultiChoice extends h5p.Question {
     view.setAttribute('content-id', `${this.contentId}`);
     view.model = this.model;
     view.addEventListener('interacted', () => this.triggerXAPI('interacted'));
-    view.addEventListener('changed', () => this.trigger('resize'));
+    view.addEventListener('changed', (event) => this.onViewStateChanged((event as CustomEvent<StateChangeDetail>).detail));
     view.addEventListener('resize', () => this.trigger('resize'));
     view.addEventListener('answered', (event) => this.onAnswered((event as CustomEvent<StateChangeDetail>).detail));
     view.addEventListener('media-slot', (event) => this.mountMedia((event as CustomEvent).detail));
@@ -48,32 +54,40 @@ class MultiChoice extends h5p.Question {
     this.setContent(h5p.jQuery(view), {
       class: this.model.singleAnswer ? 'h5p-radio' : 'h5p-check',
     });
+    this.registerButtons();
+    this.updateButtonVisibility(this.model.getViewState());
   }
 
   showAllSolutions(): void {
-    this.model.showSolutions(false);
-    this.refreshView(true);
+    this.view?.showSolutions(false, true);
   }
 
   showSolutions(): void {
-    this.model.showSolutions(true);
-    this.refreshView(true);
+    if (!this.view?.showSolutions(true)) {
+      this.read(this.model.UI.noInput);
+    }
   }
 
   hideSolutions(): void {
-    this.model.hideSolutions();
-    this.refreshView(false);
+    this.view?.hideSolutions();
   }
 
   showCheckSolution(skipFeedback = false): void {
-    this.model.showCheckSolution(skipFeedback);
-    this.refreshView(false);
+    this.view?.showCheckSolution(skipFeedback);
   }
 
   resetTask(moveFocus = false): void {
-    this.model.reset();
     this.answered = false;
-    this.refreshView(moveFocus);
+    if (this.view) {
+      this.view.retry();
+    } else {
+      this.model.retry();
+    }
+    this.removeFeedback();
+    this.updateButtonVisibility(this.model.getViewState());
+    if (moveFocus) {
+      this.view?.focusFirstAnswer();
+    }
   }
 
   getCurrentState(): { answers: number[] } {
@@ -114,18 +128,118 @@ class MultiChoice extends h5p.Question {
 
   private onAnswered(detail: StateChangeDetail): void {
     this.answered = true;
+    this.onViewStateChanged(detail);
     const event = this.createXAPIEventTemplate('answered');
     this.addQuestionToXAPI(event);
     this.addResponseToXAPI(event, detail);
     this.trigger(event);
   }
 
-  private refreshView(focus: boolean): void {
-    this.view?.refresh();
-    if (focus) {
-      this.view?.focusFirstAnswer();
+  private registerButtons(): void {
+    const behaviour = this.model.behaviour;
+    const ui = this.model.UI;
+    const canCheck = behaviour.enableCheckButton && (!behaviour.autoCheck || !this.model.singleAnswer);
+
+    if (canCheck) {
+      this.addButton(
+        'check-answer',
+        this.model.contentData?.isScoringEnabled ? ui.submitAnswerButton : ui.checkAnswerButton,
+        () => {
+          if (!this.model.answerGiven) {
+            this.read(ui.noInput);
+            return;
+          }
+          this.view?.check();
+        },
+        true,
+        { 'aria-label': ui.a11yCheck },
+        this.confirmationOptions(this.model.confirmCheck, behaviour.confirmCheckDialog, 'Finish'),
+      );
     }
+
+    this.addButton(
+      'show-solution',
+      ui.showSolutionButton,
+      () => this.showSolutions(),
+      behaviour.enableSolutionsButton,
+      { 'aria-label': ui.a11yShowSolution },
+    );
+
+    if (behaviour.enableRetry) {
+      this.addButton(
+        'try-again',
+        ui.tryAgainButton,
+        () => this.resetTask(true),
+        false,
+        { 'aria-label': ui.a11yRetry },
+        this.confirmationOptions(this.model.confirmRetry, behaviour.confirmRetryDialog, 'Retry'),
+      );
+    }
+  }
+
+  private confirmationOptions(
+    strings: ConfirmationStrings | undefined,
+    enabled: boolean | undefined,
+    fallbackConfirmLabel: string,
+  ): unknown {
+    return {
+      confirmationDialog: {
+        enable: !!enabled,
+        l10n: {
+          header: strings?.header ?? `${fallbackConfirmLabel}?`,
+          body: strings?.body ?? '',
+          cancelLabel: strings?.cancelLabel ?? 'Cancel',
+          confirmLabel: strings?.confirmLabel ?? fallbackConfirmLabel,
+        },
+        instance: this,
+        $parentElement: h5p.jQuery(this.view),
+      },
+    };
+  }
+
+  private onViewStateChanged(detail: StateChangeDetail): void {
+    const state = detail.state;
+    if (state.feedbackVisible) {
+      this.setFeedback(
+        state.feedbackText,
+        state.score,
+        state.maxScore,
+        this.model.UI.scoreBarLabel,
+      );
+    } else {
+      this.removeFeedback();
+    }
+    this.updateButtonVisibility(state);
     this.trigger('resize');
+  }
+
+  private updateButtonVisibility(state: ViewState): void {
+    const behaviour = this.model.behaviour;
+    const canCheck = behaviour.enableCheckButton && (!behaviour.autoCheck || !this.model.singleAnswer);
+
+    if (canCheck) {
+      if (state.checked || state.solutionsVisible) {
+        this.hideButton('check-answer');
+      } else {
+        this.showButton('check-answer');
+      }
+    }
+
+    if (behaviour.enableSolutionsButton) {
+      if (state.solutionsVisible) {
+        this.hideButton('show-solution');
+      } else {
+        this.showButton('show-solution');
+      }
+    }
+
+    if (behaviour.enableRetry) {
+      if (!state.retryHidden && (state.checked || state.solutionsVisible)) {
+        this.showButton('try-again');
+      } else {
+        this.hideButton('try-again');
+      }
+    }
   }
 
   private mountMedia(detail: { element: HTMLElement; media: MultiChoiceOptions['media'] }): void {

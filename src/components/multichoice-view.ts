@@ -3,7 +3,6 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { classMap } from 'lit/directives/class-map.js';
 import { MultiChoiceModel } from '../domain/model';
 import type {
-  ConfirmationStrings,
   MediaConfig,
   StateChangeDetail,
   ViewState,
@@ -22,7 +21,6 @@ export class MultiChoiceView extends LitElement {
   declare model: MultiChoiceModel;
   declare revision: number;
 
-  private pendingAction: 'check' | 'retry' | undefined;
   private mediaRequested = false;
   private message = '';
 
@@ -73,9 +71,7 @@ export class MultiChoiceView extends LitElement {
           ${unsafeHTML(this.model.question)}
         </div>
         ${this.renderAnswers(state)}
-        ${this.renderEvaluation(state)}
-        ${this.renderActions(state)}
-        ${this.renderConfirmation()}
+        ${this.message ? html`<div class="h5p-multichoice-message" role="alert">${this.message}</div>` : nothing}
       </div>
     `;
   }
@@ -176,75 +172,6 @@ export class MultiChoiceView extends LitElement {
     `;
   }
 
-  private renderEvaluation(state: ViewState): TemplateResult | typeof nothing {
-    if (!state.feedbackVisible) {
-      return nothing;
-    }
-    const status = state.score >= state.maxScore ? 'h5p-passed' : state.score > 0 ? 'h5p-almost' : 'h5p-failed';
-    const label = this.model.UI.scoreBarLabel
-      .replace(':num', `${state.score}`)
-      .replace(':total', `${state.maxScore}`);
-    return html`
-      <div class="h5p-question-feedback-container">
-        <div class="h5p-question-feedback-content ${state.feedbackText ? 'has-content' : ''}">
-          <div class="h5p-question-feedback-content-text feedback-text ${status}">${unsafeHTML(state.feedbackText)}</div>
-        </div>
-        <div class="h5p-question-scorebar-container" aria-label=${label} role="status">
-          <div class="h5p-question-scorebar"><span>${state.score} / ${state.maxScore}</span></div>
-        </div>
-      </div>
-    `;
-  }
-
-  private renderActions(state: ViewState): TemplateResult {
-    const canShowSolution = this.model.behaviour.enableSolutionsButton && !state.solutionsVisible;
-    const canCheck = this.model.behaviour.enableCheckButton && (!this.model.behaviour.autoCheck || !state.singleAnswer) && !state.checked && !state.solutionsVisible;
-    const canRetry = this.model.behaviour.enableRetry && !state.retryHidden && (state.checked || state.solutionsVisible);
-    const hasInput = this.model.answerGiven;
-
-    return html`
-      <div class="h5p-multichoice-actions h5p-question-buttons">
-        ${canShowSolution ? html`
-          <button class="h5p-question-show-solution h5p-joubelui-button secondary-button" type="button"
-            aria-label=${this.model.UI.a11yShowSolution} @click=${() => this.showSolutions(hasInput)}>
-            ${this.model.UI.showSolutionButton}
-          </button>
-        ` : nothing}
-        ${canCheck ? html`
-          <button class="h5p-question-check-answer h5p-joubelui-button" type="button"
-            aria-label=${this.model.UI.a11yCheck} ?disabled=${!hasInput}
-            @click=${() => this.requestAction('check')}>
-            ${this.model.contentData?.isScoringEnabled ? this.model.UI.submitAnswerButton : this.model.UI.checkAnswerButton}
-          </button>
-        ` : nothing}
-        ${canRetry ? html`
-          <button class="h5p-question-try-again h5p-joubelui-button secondary-button" type="button"
-            aria-label=${this.model.UI.a11yRetry} @click=${() => this.requestAction('retry')}>
-            ${this.model.UI.tryAgainButton}
-          </button>
-        ` : nothing}
-        ${this.message ? html`<div class="h5p-multichoice-message" role="alert">${this.message}</div>` : nothing}
-      </div>
-    `;
-  }
-
-  private renderConfirmation(): TemplateResult | typeof nothing {
-    if (!this.pendingAction) {
-      return nothing;
-    }
-    const strings = this.pendingAction === 'check' ? this.model.confirmCheck : this.model.confirmRetry;
-    return html`
-      <div class="h5p-multichoice-confirmation" role="dialog" aria-modal="true" aria-labelledby="h5p-multichoice-confirmation-header">
-        <h3 id="h5p-multichoice-confirmation-header">${strings?.header ?? (this.pendingAction === 'check' ? 'Finish?' : 'Retry?')}</h3>
-        <div>${unsafeHTML(strings?.body ?? '')}</div>
-        <div class="h5p-multichoice-confirmation-actions">
-          <button type="button" class="h5p-joubelui-button secondary-button" @click=${this.cancelAction}>${strings?.cancelLabel ?? 'Cancel'}</button>
-          <button type="button" class="h5p-joubelui-button" @click=${this.confirmAction}>${strings?.confirmLabel ?? (this.pendingAction === 'check' ? 'Finish' : 'Confirm')}</button>
-        </div>
-      </div>
-    `;
-  }
-
   private select(index: number): void {
     this.model.select(index);
     this.refresh();
@@ -281,56 +208,51 @@ export class MultiChoiceView extends LitElement {
     emit(this, 'resize', undefined);
   }
 
-  private showSolutions(hasInput: boolean): void {
-    if (this.model.behaviour.showSolutionsRequiresInput && !hasInput) {
+  showSolutions(hideRetry = false, force = false): boolean {
+    if (!force && this.model.behaviour.showSolutionsRequiresInput && !this.model.answerGiven) {
       this.message = this.model.UI.noInput;
       this.refresh();
-      return;
+      return false;
     }
-    this.model.showSolutions();
+    this.model.showSolutions(hideRetry);
     this.message = '';
     this.refresh();
     this.focusFirstAnswer();
+    emit(this, 'changed', this.detail());
+    emit(this, 'resize', undefined);
+    return true;
+  }
+
+  check(): void {
+    this.model.check();
+    this.refresh();
+    this.focusFirstAnswer();
+    emit(this, 'changed', this.detail());
+    emit(this, 'answered', this.detail());
     emit(this, 'resize', undefined);
   }
 
-  private requestAction(action: 'check' | 'retry'): void {
-    const needsConfirmation = action === 'check'
-      ? this.model.behaviour.confirmCheckDialog
-      : this.model.behaviour.confirmRetryDialog;
-    if (needsConfirmation) {
-      this.pendingAction = action;
-      this.refresh();
-      return;
-    }
-    this.performAction(action);
+  retry(): void {
+    this.model.retry();
+    this.message = '';
+    this.refresh();
+    this.focusFirstAnswer();
+    emit(this, 'changed', this.detail());
+    emit(this, 'resize', undefined);
   }
 
-  private confirmAction = (): void => {
-    if (this.pendingAction) {
-      const action = this.pendingAction;
-      this.pendingAction = undefined;
-      this.performAction(action);
-    }
-  };
-
-  private cancelAction = (): void => {
-    this.pendingAction = undefined;
+  hideSolutions(): void {
+    this.model.hideSolutions();
+    this.message = '';
     this.refresh();
-  };
+    emit(this, 'changed', this.detail());
+    emit(this, 'resize', undefined);
+  }
 
-  private performAction(action: 'check' | 'retry'): void {
-    if (action === 'check') {
-      this.model.check();
-      this.refresh();
-      this.focusFirstAnswer();
-      emit(this, 'answered', this.detail());
-    } else {
-      this.model.retry();
-      this.message = '';
-      this.refresh();
-      this.focusFirstAnswer();
-    }
+  showCheckSolution(skipFeedback = false): void {
+    this.model.showCheckSolution(skipFeedback);
+    this.refresh();
+    emit(this, 'changed', this.detail());
     emit(this, 'resize', undefined);
   }
 

@@ -4,6 +4,8 @@ class QuestionStub {
   answered = false;
   content: HTMLElement | undefined;
   events: Array<{ name: unknown; data?: unknown }> = [];
+  buttons = new Map<string, { callback: () => void; visible: boolean }>();
+  feedback: { content: string; score: number; maxScore: number } | undefined;
 
   constructor(public name: string, public options: unknown) {}
 
@@ -12,6 +14,37 @@ class QuestionStub {
     document.body.append(this.content);
     return this;
   }
+
+  addButton(id: string, _label: string, callback: () => void, visible = true): this {
+    this.buttons.set(id, { callback, visible });
+    return this;
+  }
+
+  showButton(id: string): void {
+    const button = this.buttons.get(id);
+    if (button) {
+      button.visible = true;
+    }
+  }
+
+  hideButton(id: string): void {
+    const button = this.buttons.get(id);
+    if (button) {
+      button.visible = false;
+    }
+  }
+
+  setFeedback(content: string, score: number, maxScore: number): this {
+    this.feedback = { content, score, maxScore };
+    return this;
+  }
+
+  removeFeedback(): this {
+    this.feedback = undefined;
+    return this;
+  }
+
+  read(): void {}
 
   trigger(name: unknown, data?: unknown): void {
     this.events.push({ name, data });
@@ -73,5 +106,15 @@ describe('H5P.MultiChoice adapter', () => {
     expect(instance.getCurrentState()).toEqual({ answers: [0] });
     expect(instance.getScore()).toBe(1);
     expect(instance.view.querySelector('[aria-checked="true"]')).toBeTruthy();
+    expect(instance.buttons.has('check-answer')).toBe(true);
+    expect(instance.buttons.has('show-solution')).toBe(true);
+    expect(instance.buttons.has('try-again')).toBe(true);
+    expect(instance.view.querySelector('.h5p-multichoice-actions')).toBeNull();
+
+    instance.buttons.get('check-answer')?.callback();
+    await instance.view.updateComplete;
+
+    expect(instance.feedback?.score).toBe(1);
+    expect(instance.feedback?.maxScore).toBe(1);
   });
 });
